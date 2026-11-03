@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0b0f14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="時計">
+<title>スマート時計</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@900&family=M+PLUS+1:wght@900&display=swap">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root {
+    --bg: #0b0f14;
+    --fg: #e6fffb;
+    --accent: #5eead4;
+    --dim: #5b6b78;
+    --font: "Inter", "M PLUS 1", "游ゴシック", "Yu Gothic", YuGothic, "Hiragino Sans", "Noto Sans JP", "Meiryo", "BIZ UDGothic", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: var(--font); overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #app {
+    position: fixed; inset: 0;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2vmin;
+  }
+  .time {
+    display: flex; align-items: baseline; justify-content: center;
+    font-variant-numeric: tabular-nums; font-feature-settings: "tnum";
+    font-weight: 900; line-height: 1; letter-spacing: -0.02em;
+    color: var(--fg);
+    text-shadow: 0 0 2vmin rgba(94, 234, 212, .25);
+  }
+  .hm { font-size: 26vw; }
+  .colon { display: inline-block; transform: translateY(-0.06em); transition: opacity .2s; }
+  .colon.off { opacity: .25; }
+  .sec { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 900; }
+  .date { color: var(--dim); font-weight: 900; letter-spacing: .05em; font-variant-numeric: tabular-nums; }
+
+  /* 縦置き：時:分 の下に秒・日付 */
+  @media (orientation: portrait) {
+    .time { flex-direction: column; align-items: center; }
+    .hm { font-size: 27vw; }
+    .sec { font-size: 12vw; margin-top: 2vh; }
+    .date { font-size: 5.5vw; margin-top: 3vh; }
+  }
+  /* 横置き：時:分:秒 を一行で大きく */
+  @media (orientation: landscape) {
+    .time { flex-direction: row; }
+    .hm { font-size: min(22vw, 58vh); }
+    .sec { font-size: min(8vw, 20vh); margin-left: 1.5vw; }
+    .date { font-size: min(3.2vw, 7vh); }
+  }
+
+  /* 状態表示 */
+  #status {
+    position: fixed; top: calc(env(safe-area-inset-top) + 10px); right: calc(env(safe-area-inset-right) + 12px);
+    font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 6px;
+  }
+  #status .dot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; }
+  #status.on .dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+
+  /* スリープ防止用の小さな動画（ほぼ見えないが DOM 上で表示状態にしておく） */
+  #keepawake {
+    position: fixed; left: 0; bottom: 0; width: 2px; height: 2px;
+    opacity: 0.01; pointer-events: none;
+  }
+
+  /* 開始オーバーレイ（動画再生にはユーザー操作が必要） */
+  #start {
+    position: fixed; inset: 0; background: rgba(11, 15, 20, .92);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+    z-index: 10; text-align: center; padding: 24px;
+  }
+  #start button {
+    font: inherit; font-size: 20px; padding: 16px 32px; border-radius: 999px;
+    border: 2px solid var(--accent); background: transparent; color: var(--accent);
+  }
+  #start p { color: var(--dim); font-size: 14px; margin: 0; line-height: 1.6; }
+  #start.hidden { display: none; }
+
+  /* ログ */
+  #logToggle {
+    position: fixed; left: calc(env(safe-area-inset-left) + 10px); bottom: calc(env(safe-area-inset-bottom) + 10px);
+    font: inherit; font-size: 12px; color: var(--dim); background: transparent;
+    border: 1px solid #1f2a33; border-radius: 6px; padding: 4px 8px; z-index: 6;
+  }
+  #logPanel {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 40vh; z-index: 5;
+    background: rgba(5, 8, 11, .96); border-top: 1px solid #1f2a33;
+    display: none; flex-direction: column;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  #logPanel.open { display: flex; }
+  #logBar { display: flex; gap: 8px; justify-content: flex-end; padding: 6px 10px; }
+  #logBar button {
+    font: inherit; font-size: 12px; color: var(--fg); background: #1f2a33;
+    border: 0; border-radius: 6px; padding: 6px 10px;
+  }
+  #log {
+    flex: 1; overflow: auto; margin: 0; padding: 4px 10px 40px;
+    font-family: ui-monospace, Menlo, Consolas, "BIZ UDGothic", monospace; font-size: 11px;
+    color: #9fb3c1; white-space: pre-wrap; word-break: break-all;
+    -webkit-user-select: text; user-select: text;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="time">
+    <div class="hm"><span id="hh">--</span><span class="colon" id="colon">:</span><span id="mm">--</span></div>
+    <div class="sec" id="ss">--</div>
+  </div>
+  <div class="date" id="date"></div>
+</div>
+
+<div id="status"><span class="dot"></span><span id="statusText">スリープ防止 OFF</span></div>
+
+<video id="keepawake" src="keepawake.mp4" muted loop playsinline webkit-playsinline preload="auto"></video>
+
+<div id="start">
+  <button id="startBtn">タップして開始</button>
+  <p>画面がスリープしないよう、裏で小さな動画を再生します。<br>ホーム画面に追加するとアプリとして使えます。</p>
+</div>
+
+<button id="logToggle">ログ</button>
+<div id="logPanel">
+  <div id="logBar">
+    <button id="copyLog">ログをコピー</button>
+    <button id="clearLog">クリア</button>
+    <button id="closeLog">閉じる</button>
+  </div>
+  <pre id="log"></pre>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+
+  // ---------- ログ ----------
+  const logEl = $('log');
+  const lines = [];
+  function log(...args) {
+    const t = new Date();
+    const ts = t.toTimeString().slice(0, 8) + '.' + String(t.getMilliseconds()).padStart(3, '0');
+    const msg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+    lines.push(`[${ts}] ${msg}`);
+    if (lines.length > 500) lines.shift();
+    logEl.textContent = lines.join('\n');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  window.addEventListener('error', e => log('ERROR', e.message));
+  window.addEventListener('unhandledrejection', e => log('REJECT', String(e.reason)));
+
+  $('logToggle').onclick = () => $('logPanel').classList.toggle('open');
+  $('closeLog').onclick = () => $('logPanel').classList.remove('open');
+  $('clearLog').onclick = () => { lines.length = 0; logEl.textContent = ''; };
+  $('copyLog').onclick = async () => {
+    const text = [
+      `UA: ${navigator.userAgent}`,
+      `standalone: ${matchMedia('(display-mode: standalone)').matches || navigator.standalone === true}`,
+      `orientation: ${screen.orientation ? screen.orientation.type : (innerWidth > innerHeight ? 'landscape' : 'portrait')}`,
+      '---', ...lines
+    ].join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+    }
+    $('copyLog').textContent = 'コピーしました';
+    setTimeout(() => $('copyLog').textContent = 'ログをコピー', 1500);
+  };
+
+  log('起動', navigator.userAgent);
+
+  // ---------- 時計 ----------
+  const WD = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  const p2 = n => String(n).padStart(2, '0');
+  function tick() {
+    const d = new Date();
+    $('hh').textContent = p2(d.getHours());
+    $('mm').textContent = p2(d.getMinutes());
+    $('ss').textContent = p2(d.getSeconds());
+    $('colon').classList.toggle('off', d.getMilliseconds() >= 500);
+    $('date').textContent = `${p2(d.getMonth() + 1)}/${p2(d.getDate())} ${WD[d.getDay()]}`;
+  }
+  function loop() {
+    tick();
+    const ms = new Date().getMilliseconds();
+    setTimeout(loop, (ms < 500 ? 500 : 1000) - ms + 5); // 0ms / 500ms 境界に合わせて更新
+  }
+  loop();
+
+  // ---------- 向き ----------
+  const logOrientation = () => log('向き', innerWidth > innerHeight ? 'landscape' : 'portrait', `${innerWidth}x${innerHeight}`);
+  matchMedia('(orientation: portrait)').addEventListener('change', logOrientation);
+  logOrientation();
+
+  // ---------- スリープ防止（動画） ----------
+  const video = $('keepawake');
+  let wanted = false;
+
+  function setStatus(on) {
+    $('status').classList.toggle('on', on);
+    $('statusText').textContent = on ? 'スリープ防止 ON' : 'スリープ防止 OFF';
+  }
+
+  async function playVideo(reason) {
+    try {
+      await video.play();
+      log('動画再生 OK', reason);
+    } catch (e) {
+      log('動画再生 失敗', reason, e.name, e.message);
+      setStatus(false);
+      if (e.name === 'NotAllowedError') $('start').classList.remove('hidden');
+    }
+  }
+
+  ['play', 'playing', 'pause', 'ended', 'stalled', 'suspend', 'error'].forEach(ev =>
+    video.addEventListener(ev, () => {
+      if (ev !== 'suspend') log('video:', ev);
+      if (ev === 'playing') setStatus(true);
+      if (ev === 'pause' || ev === 'ended' || ev === 'error') {
+        setStatus(false);
+        if (wanted && document.visibilityState === 'visible') setTimeout(() => playVideo('auto-resume'), 300);
+      }
+    })
+  );
+
+  // 一部ブラウザで loop 属性が効かないケースの保険
+  video.addEventListener('timeupdate', () => {
+    if (video.duration && video.currentTime > video.duration - 0.5) video.currentTime = 0;
+  });
+
+  $('startBtn').onclick = async () => {
+    wanted = true;
+    $('start').classList.add('hidden');
+    await playVideo('user-tap');
+  };
+
+  document.addEventListener('visibilitychange', () => {
+    log('visibility', document.visibilityState);
+    if (document.visibilityState === 'visible' && wanted) playVideo('visible');
+  });
+
+  // ---------- Service Worker ----------
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js')
+      .then(r => log('SW 登録', r.scope))
+      .catch(e => log('SW 登録失敗', e.message));
+  } else {
+    log('SW 非対応');
+  }
+})();
+</script>
+</body>
+</html>
