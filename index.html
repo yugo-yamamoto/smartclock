@@ -135,7 +135,7 @@
   <p>画面がスリープしないようにします（Wake Lock / 動画再生）。<br>ホーム画面に追加するとアプリとして使えます。</p>
 </div>
 
-<button id="logToggle">ログ</button>
+<button id="logToggle">ログ <span id="ver"></span></button>
 <div id="logPanel">
   <div id="logBar">
     <button id="copyLog">ログをコピー</button>
@@ -185,7 +185,9 @@
     setTimeout(() => $('copyLog').textContent = 'ログをコピー', 1500);
   };
 
-  log('起動', navigator.userAgent);
+  const APP_VERSION = 'v5';
+  $('ver').textContent = APP_VERSION;
+  log('起動', APP_VERSION, navigator.userAgent);
 
   // ---------- 時計 ----------
   const WD = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
@@ -294,8 +296,21 @@
 
   // ---------- Service Worker ----------
   if ('serviceWorker' in navigator) {
+    // 新しい SW に切り替わったら 1 回だけ自動で再読み込みして最新版を表示する
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      log('SW 更新を検出');
+      if (hadController && !reloaded) { reloaded = true; location.reload(); }
+    });
     navigator.serviceWorker.register('sw.js')
-      .then(r => log('SW 登録', r.scope))
+      .then(r => {
+        log('SW 登録', r.scope);
+        // アプリに戻ってきたときにも更新を確認する
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') r.update().catch(() => {});
+        });
+      })
       .catch(e => log('SW 登録失敗', e.message));
   } else {
     log('SW 非対応');
