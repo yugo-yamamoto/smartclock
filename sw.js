@@ -1,4 +1,4 @@
-const CACHE = 'smartclock-v3';
+const CACHE = 'smartclock-v4';
 const ASSETS = ['./', 'index.html', 'manifest.webmanifest', 'keepawake.mp4', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -31,6 +31,17 @@ self.addEventListener('fetch', (e) => {
           return hit || net;
         })
       )
+    );
+    return;
+  }
+  // ページ本体はネットワーク優先（更新がすぐ反映されるように）、オフライン時はキャッシュ
+  if (req.mode === 'navigate') {
+    e.respondWith(
+      fetch(req).then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put('index.html', copy));
+        return res;
+      }).catch(() => caches.match('index.html'))
     );
     return;
   }
