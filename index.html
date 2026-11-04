@@ -132,7 +132,7 @@
 
 <div id="start">
   <button id="startBtn">タップして開始</button>
-  <p>画面がスリープしないようにします（Wake Lock / 動画再生）。<br>ホーム画面に追加するとアプリとして使えます。</p>
+  <p>充電中は画面がスリープしないようにします。<br>ホーム画面に追加するとアプリとして使えます。</p>
 </div>
 
 <button id="logToggle">ログ <span id="ver"></span></button>
@@ -185,7 +185,7 @@
     setTimeout(() => $('copyLog').textContent = 'ログをコピー', 1500);
   };
 
-  const APP_VERSION = 'v5';
+  const APP_VERSION = 'v6';
   $('ver').textContent = APP_VERSION;
   log('起動', APP_VERSION, navigator.userAgent);
 
@@ -213,35 +213,39 @@
   logOrientation();
 
   // ---------- スリープ防止 ----------
-  // Android Chrome 等: Screen Wake Lock API（主）
-  // 旧 iOS Safari 等: 小さな動画のループ再生（予備）
+  // 方針:
+  //  - 充電中だけスリープ防止する（Battery Status API。非対応ブラウザでは常時）
+  //  - まず Screen Wake Lock API を使う。使えない／失敗したときだけ小さな動画を再生する
   const video = $('keepawake');
-  let wanted = false;
+  let started = false;       // 「タップして開始」済み
+  let charging = null;       // true/false、null = 電池情報なし（非対応）
   let wakeLock = null;
+  let useVideo = false;      // Wake Lock が使えないので動画で代替中
+
+  const lockActive = () => !!(wakeLock && !wakeLock.released);
+  const shouldKeepAwake = () => started && charging !== false && document.visibilityState === 'visible';
 
   function updateStatus() {
-    const viaLock = !!(wakeLock && !wakeLock.released);
     const viaVideo = !video.paused && !video.ended;
-    const on = viaLock || viaVideo;
-    $('status').classList.toggle('on', on);
-    $('statusText').textContent = viaLock ? 'スリープ防止 ON（Wake Lock）'
+    $('status').classList.toggle('on', lockActive() || viaVideo);
+    let text = lockActive() ? 'スリープ防止 ON（Wake Lock）'
       : viaVideo ? 'スリープ防止 ON（動画）' : 'スリープ防止 OFF';
+    if (started && charging === false) text = '充電していないのでスリープ防止 OFF';
+    $('statusText').textContent = text;
   }
 
   async function requestWakeLock(reason) {
-    if (!('wakeLock' in navigator)) { log('WakeLock 非対応 → 動画で代替'); return; }
-    if (wakeLock && !wakeLock.released) return;
+    if (!('wakeLock' in navigator)) { log('WakeLock 非対応'); return false; }
+    if (lockActive()) return true;
     try {
       wakeLock = await navigator.wakeLock.request('screen');
       log('WakeLock 取得', reason);
-      wakeLock.addEventListener('release', () => {
-        log('WakeLock 解放');
-        updateStatus();
-      });
+      wakeLock.addEventListener('release', () => { log('WakeLock 解放'); updateStatus(); });
+      return true;
     } catch (e) {
       log('WakeLock 失敗', reason, e.name, e.message);
+      return false;
     }
-    updateStatus();
   }
 
   async function playVideo(reason) {
@@ -250,47 +254,72 @@
       log('動画再生 OK', reason);
     } catch (e) {
       log('動画再生 失敗', reason, e.name, e.message);
-      if (e.name === 'NotAllowedError' && !(wakeLock && !wakeLock.released)) $('start').classList.remove('hidden');
+      if (e.name === 'NotAllowedError') $('start').classList.remove('hidden');
+    }
+  }
+
+  // 状態に合わせてスリープ防止を ON/OFF する（何度呼んでもよい）
+  async function apply(reason) {
+    if (shouldKeepAwake()) {
+      if (await requestWakeLock(reason)) {
+        if (useVideo) log('Wake Lock に切り替え、動画を停止');
+        useVideo = false;
+        if (!video.paused) video.pause();
+      } else {
+        if (!useVideo) log('動画で代替');
+        useVideo = true;
+        if (video.paused) await playVideo(reason);
+      }
+    } else {
+      if (lockActive()) await wakeLock.release().catch(() => {});
+      if (!video.paused) { useVideo = false; video.pause(); log('動画停止', reason); }
     }
     updateStatus();
   }
 
-  function keepAwake(reason) {
-    requestWakeLock(reason);
-    playVideo(reason);
-  }
-
-  ['play', 'playing', 'pause', 'ended', 'stalled', 'error'].forEach(ev =>
+  ['playing', 'pause', 'ended', 'error'].forEach(ev =>
     video.addEventListener(ev, () => {
       log('video:', ev);
       updateStatus();
-      if ((ev === 'pause' || ev === 'ended' || ev === 'error') && wanted && document.visibilityState === 'visible') {
-        setTimeout(() => playVideo('auto-resume'), 300);
-      }
+      // 代替中に勝手に止まったら再開
+      if (ev !== 'playing' && useVideo && shouldKeepAwake()) setTimeout(() => apply('video-resume'), 300);
     })
   );
-
   // 一部ブラウザで loop 属性が効かないケースの保険
   video.addEventListener('timeupdate', () => {
     if (video.duration && video.currentTime > video.duration - 0.5) video.currentTime = 0;
   });
 
+  // 充電状態
+  if (navigator.getBattery) {
+    navigator.getBattery().then(b => {
+      charging = b.charging;
+      log('電池', charging ? '充電中' : '充電していない', `${Math.round(b.level * 100)}%`);
+      b.addEventListener('chargingchange', () => {
+        charging = b.charging;
+        log('充電状態が変化', charging ? '充電中' : '充電していない');
+        apply('charging-change');
+      });
+      apply('battery-init');
+    }).catch(e => log('電池情報 取得失敗 → 常時スリープ防止', e.message));
+  } else {
+    log('電池情報 非対応 → 常時スリープ防止');
+  }
+
   $('startBtn').onclick = () => {
-    wanted = true;
+    started = true;
     $('start').classList.add('hidden');
-    keepAwake('user-tap');
+    apply('user-tap');
   };
 
-  // Wake Lock はタブが裏に回ると自動解放されるので、戻ったら取り直す
+  // Wake Lock は裏に回ると自動解放されるので、戻ったら取り直す
   document.addEventListener('visibilitychange', () => {
     log('visibility', document.visibilityState);
-    if (document.visibilityState === 'visible' && wanted) keepAwake('visible');
+    apply('visibility');
   });
 
-  // 念のため 30 秒ごとに状態を確認して外れていれば取り直す
-  setInterval(() => {
-    if (wanted && document.visibilityState === 'visible' && (!wakeLock || wakeLock.released)) requestWakeLock('watchdog');
-  }, 30000);
+  // 念のため 30 秒ごとに状態を確認
+  setInterval(() => { if (shouldKeepAwake() && !lockActive() && video.paused) apply('watchdog'); }, 30000);
 
   updateStatus();
 

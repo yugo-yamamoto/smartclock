@@ -1,4 +1,4 @@
-const CACHE = 'smartclock-v5';
+const CACHE = 'smartclock-v6';
 const ASSETS = ['./', 'index.html', 'manifest.webmanifest', 'keepawake.mp4', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
